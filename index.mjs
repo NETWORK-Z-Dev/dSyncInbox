@@ -29,8 +29,8 @@ export default class dSyncInbox {
         this.getIdentifier = typeof getIdentifier === "function" ? getIdentifier : null;
         this.beforeReturn = typeof beforeReturn === "function" ? beforeReturn : null;
 
-        if(!isValidated) throw new Error("No isValidated function provided");
-        if(!getIdentifier) throw new Error("No getIdentifier function provided");
+        if (!isValidated) throw new Error("No isValidated function provided");
+        if (!getIdentifier) throw new Error("No getIdentifier function provided");
 
         if (!io) {
             console.error("socket io is required!")
@@ -81,47 +81,47 @@ export default class dSyncInbox {
 
         app.post(`/inbox/fetch{/:timestamp}{/:inboxId}{/:customId}`, this.express.json(), async (req, res) => {
             const {inboxId, timestamp, customId} = req?.params;
-            if(!await this.isValidated(req, res)) return res.status(403).json({ error: "Forbidden" })
+            if (!await this.isValidated(req, res)) return res.status(403).json({error: "Forbidden"})
 
             let identifier = await this.getIdentifier(req, res);
-            if(!identifier) return res.status(403).json({ error: "Missing identifier" })
+            if (!identifier) return res.status(403).json({error: "Missing identifier"})
 
             let messages = null;
-            if(!inboxId && !timestamp) {
+            if (!inboxId && !timestamp) {
                 messages = await this.db.queryDatabase(
                     "SELECT * FROM inbox WHERE targetId = ? ORDER BY createdAt DESC LIMIT 50",
                     [identifier]
                 );
             }
-            if(!inboxId && timestamp) {
+            if (!inboxId && timestamp) {
                 messages = await this.db.queryDatabase(
                     "SELECT * FROM inbox WHERE identifier = ? created < ? ORDER BY createdAt DESC LIMIT 50",
                     [identifier, timestamp]
                 );
             }
-            if(inboxId && !customId) {
+            if (inboxId && !customId) {
                 messages = await this.db.queryDatabase(
                     "SELECT * FROM inbox WHERE id = ? AND identifier = ? LIMIT 50",
                     [inboxId, identifier]
                 );
             }
-            if(!inboxId && customId) {
+            if (!inboxId && customId) {
                 messages = await this.db.queryDatabase(
                     "SELECT * FROM inbox WHERE customId = ? AND identifier = ? LIMIT 50",
                     [inboxId, identifier]
                 );
             }
 
-            if(messages?.length > 0){
-                for(let message of messages){
-                    if(message?.data?.startsWith("{") && typeof message?.data === "string") message.data = JSON.parse(message.data);
+            if (messages?.length > 0) {
+                for (let message of messages) {
+                    if (message?.data?.startsWith("{") && typeof message?.data === "string") message.data = JSON.parse(message.data);
                 }
             }
 
-            if(this.beforeReturn) await this.beforeReturn(req, res, messages)
+            if (this.beforeReturn) await this.beforeReturn(req, res, messages)
 
             try {
-                res.status(200).json({ inbox: messages });
+                res.status(200).json({inbox: messages});
             } catch (err) {
                 res.status(400).json({error: "Failed to solve challenge"})
             }
@@ -132,29 +132,44 @@ export default class dSyncInbox {
             var ip = this.getSocketIp(socket);
 
             socket.on("/messenger/hello", async (user, response) => {
-                if(!await this.validateSocketAuth(user?.sessionId, user?.publicKey, response)) return;
+                if (!await this.validateSocketAuth(user?.sessionId, user?.publicKey, response)) return;
 
                 let userGid = this.signer.generateGid(user?.publicKey);
-                if(!userGid) return response({ error: "Failed to generate gid" })
+                if (!userGid) return response({error: "Failed to generate gid"})
+
+                // check database if user is known with home server etc
+                let inTable = Object.keys(await this.getGidTable(userGid))?.length > 0;
+                if(!inTable){
+                    if(!user?.home_server) return response({ error: "Requesting Home Server! (home_server)"})
+                    let gidTableResult = await this.updateGidTable({
+                        gid: userGid,
+                        home_server: user.home_server,
+                        publicKey: user.publicKey,
+                    })
+
+                    if(gidTableResult?.affectedRows !== 1){
+                        Logger.warn("Messenger GID Table insert warning!")
+                        Logger.warn(gidTableResult)
+                    }
+                }
 
                 // join own room to emit messages to
                 const targetIsOnline = io.sockets.adapter.rooms.has(userGid);
-                if(!targetIsOnline) {
+                if (!targetIsOnline) {
                     socket.join(userGid);
-                    console.log(`user joined ${userGid}`)
                 }
 
-                response({ error: null})
+                response({error: null})
             })
 
             socket.on("/messenger/send", async (user, response) => {
-                if(!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
+                if (!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
 
-                if(!user?.message || typeof user?.message !== "object") return response({ error: "No message object provided" })
-                if(!user?.message?.type) return response({ error: "No message type provided" })
+                if (!user?.message || typeof user?.message !== "object") return response({error: "No message object provided"})
+                if (!user?.message?.type) return response({error: "No message type provided"})
 
-                if(!user?.message?.publicKey) return response({ error: "No public key provided" })
-                if(!user?.message?.targetPublicKey) return response({ error: "No target public key provided" })
+                if (!user?.message?.publicKey) return response({error: "No public key provided"})
+                if (!user?.message?.targetPublicKey) return response({error: "No target public key provided"})
 
                 let userGid = this.signer.generateGid(user?.message?.publicKey);
                 let targetGid = this.signer.generateGid(user?.message?.targetPublicKey);
@@ -174,8 +189,7 @@ export default class dSyncInbox {
                     customId: user.message.timestamp
                 })
 
-
-                response({ error: null})
+                response({error: null})
             })
 
             socket.on("/messenger/fetch", async (user, response) => {
@@ -184,66 +198,101 @@ export default class dSyncInbox {
         })
     }
 
-    async emitToGid(targetGid, event, data){
+    async emitToGid(targetGid, event, data) {
         this.io.to(`${targetGid}`).emit(event, {...data})
     }
 
-    async validateSocketAuth(sessionId, publicKey, response){
-        if(!sessionId || !publicKey){
-            response?.({ error: "Authentication failed" })
+    async validateSocketAuth(sessionId, publicKey, response) {
+        if (!sessionId || !publicKey) {
+            response?.({error: "Authentication failed"})
             return false
         }
 
         let sessionResult = AuthTools.verifySession(this.auther.authSessions, sessionId, publicKey);
         let result = sessionResult?.valid ?? false;
 
-        if(!result && response){
-            response({ error: "Authentication failed - Result invalid" })
+        if (!result && response) {
+            response({error: "Authentication failed - Result invalid"})
             return false;
-        }
-        else if(result === true){
+        } else if (result === true) {
             return true;
         }
 
-        response({ error: "Authentication failed" })
+        response({error: "Authentication failed"})
         return false;
     }
 
-    getSocketIp(socket){
+    getSocketIp(socket) {
         return socket?.handshake?.headers["x-forwarded-for"]?.split(",")[0].trim()
             || socket?.handshake?.headers["x-real-ip"]
             || socket?.handshake?.address;
     }
 
     async setInboxEntry({
-        targetId = null,
-        type = null,
-        data = null,
-        isRead = null,
-        customId = null,
-        expiresAt = null,
-    } = {}){
-        if(!type?.trim()) throw new Error("type is required!")
-        if(!targetId?.trim()) throw new Error("targetId is required!")
-        if(!data || typeof data !== "object") throw new Error("data is required and must be a json object!")
-        if(!customId) throw new Error("customId is required for identification!")
+                            targetId = null,
+                            type = null,
+                            data = null,
+                            isRead = null,
+                            customId = null,
+                            expiresAt = null,
+                        } = {}) {
+        if (!type?.trim()?.length === 0) throw new Error("type is required!")
+        if (!targetId?.trim()?.length === 0) throw new Error("targetId is required!")
+        if (!data || typeof data !== "object") throw new Error("data is required and must be a json object!")
+        if (!customId) throw new Error("customId is required for identification!")
 
         return await this.db.queryDatabase(
             `INSERT INTO inbox (id, targetId, type, data, isRead, customId, expiresAt)
-             VALUES(?, ?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                  isRead = IF(isRead IS NULL, VALUES(isRead), isRead)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY
+            UPDATE
+                isRead = IF(isRead IS NULL, VALUES (isRead), isRead)`,
             [randomUUID(), targetId, type, JSON.stringify(data, null, 4), isRead, customId, expiresAt]
         );
     }
 
-    async init(){
+    async updateGidTable({
+                             gid = null,
+                             publicKey = null,
+                             home_server = null,
+                         } = {}) {
+        if (gid?.trim()?.length === 0) return { error: "GID missing!"}
+        if (publicKey?.trim()?.length === 0) return { error: "Public Key missing!"}
+        if (home_server?.trim()?.length === 0) return { error: "Home Server missing!"}
+
+        let calculatedGid = await this.signer.generateGid(publicKey);
+        if(calculatedGid !== gid) return { error: "GID and Public Key Mismatch!"}
+
+        return await this.db.queryDatabase(
+            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt)
+             VALUES (?, ?, ?, ?) ON DUPLICATE KEY
+            UPDATE
+                updatedAt = (UNIX_TIMESTAMP() * 1000),
+                home_server = home_server`,
+            [gid, publicKey, home_server, null]
+        );
+    }
+
+    async getGidTable(gid = null, publicKey = null) {
+        if (gid === null && publicKey === null) return { error: "GID or Public Key missing!"}
+
+        let calculatedGid = gid;
+        if(publicKey){
+            calculatedGid = await this.signer.generateGid(publicKey);
+        }
+
+        return await this.db.queryDatabase(
+            `SELECT * FROM inbox_gid_table WHERE gid = ?`,
+            [calculatedGid]
+        );
+    }
+
+    async init() {
         const tables = [
             {
                 name: "inbox",
                 columns: [
                     {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
-                    {name: "id", type: "varchar(255) NOT NULL"},
+                    {name: "id", type: "varchar(255) NOT NULL UNIQUE KEY"},
                     {name: "customId", type: "varchar(500) NULL DEFAULT NULL"},
                     {name: "targetId", type: "varchar(500) NOT NULL"},
                     {name: "type", type: "varchar(255) NOT NULL"},
@@ -251,6 +300,17 @@ export default class dSyncInbox {
                     {name: "createdAt", type: "bigint NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000)"},
                     {name: "expiresAt", type: "bigint NULL DEFAULT NULL"},
                     {name: "isRead", type: "bigint NULL DEFAULT NULL"},
+                ]
+            },
+            {
+                name: "inbox_gid_table",
+                columns: [
+                    {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
+                    {name: "gid", type: "varchar(255) NOT NULL UNIQUE KEY"},
+                    {name: "publicKey", type: "longtext"},
+                    {name: "home_server", type: "varchar(500) NOT NULL"},
+                    {name: "createdAt", type: "bigint NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000)"},
+                    {name: "updatedAt", type: "bigint DEFAULT NULL"},
                 ]
             }
         ]
