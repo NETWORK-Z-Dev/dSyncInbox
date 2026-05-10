@@ -1,5 +1,6 @@
 import {randomUUID, randomBytes, createHash} from "crypto"
 import DateTools from "@hackthedev/datetools"
+import AuthTools from "@hackthedev/dsync-auth";
 
 function generateRandomString() {
     return (Math.random().toString(36).slice(2)) + (Math.random().toString(36).slice(2))
@@ -7,23 +8,34 @@ function generateRandomString() {
 
 export default class dSyncInbox {
     constructor({
+                    io = null,
                     app = null,
                     express = null,
                     dSyncSign = null,
                     dSyncSql = null,
+                    dSyncAuth = null,
                     isValidated = null,
-                    getIdentifier = null
+                    getIdentifier = null,
+                    beforeReturn = null,
                 } = {}) {
 
+        this.io = io;
         this.signer = dSyncSign;
         this.db = dSyncSql;
         this.express = express
+        this.auther = dSyncAuth
 
         this.isValidated = typeof isValidated === "function" ? isValidated : null;
-        if(!isValidated) throw new Error("No isValidated function provided");
-
         this.getIdentifier = typeof getIdentifier === "function" ? getIdentifier : null;
+        this.beforeReturn = typeof beforeReturn === "function" ? beforeReturn : null;
+
+        if(!isValidated) throw new Error("No isValidated function provided");
         if(!getIdentifier) throw new Error("No getIdentifier function provided");
+
+        if (!io) {
+            console.error("socket io is required!")
+            process.exit(0)
+        }
 
         if (!app) {
             console.error("Express app is required!")
@@ -37,6 +49,11 @@ export default class dSyncInbox {
 
         if (!dSyncSign) {
             console.error("dSyncSign is required!")
+            process.exit(0)
+        }
+
+        if (!dSyncAuth) {
+            console.error("dSyncAuth is required!")
             process.exit(0)
         }
 
@@ -84,13 +101,13 @@ export default class dSyncInbox {
             }
             if(inboxId && !customId) {
                 messages = await this.db.queryDatabase(
-                    "SELECT * FROM inbox WHERE id = ? AND identifier = ? LIMIT 1",
+                    "SELECT * FROM inbox WHERE id = ? AND identifier = ? LIMIT 50",
                     [inboxId, identifier]
                 );
             }
             if(!inboxId && customId) {
                 messages = await this.db.queryDatabase(
-                    "SELECT * FROM inbox WHERE customId = ? AND identifier = ? LIMIT 1",
+                    "SELECT * FROM inbox WHERE customId = ? AND identifier = ? LIMIT 50",
                     [inboxId, identifier]
                 );
             }
@@ -101,12 +118,101 @@ export default class dSyncInbox {
                 }
             }
 
+            if(this.beforeReturn) await this.beforeReturn(req, res, messages)
+
             try {
                 res.status(200).json({ inbox: messages });
             } catch (err) {
                 res.status(400).json({error: "Failed to solve challenge"})
             }
         })
+
+        this.io.on("connection", async (socket) => {
+            // socket ip
+            var ip = this.getSocketIp(socket);
+
+            socket.on("/messenger/hello", async (user, response) => {
+                if(!await this.validateSocketAuth(user?.sessionId, user?.publicKey, response)) return;
+
+                let userGid = this.signer.generateGid(user?.publicKey);
+                if(!userGid) return response({ error: "Failed to generate gid" })
+
+                // join own room to emit messages to
+                const targetIsOnline = io.sockets.adapter.rooms.has(userGid);
+                if(!targetIsOnline) {
+                    socket.join(userGid);
+                    console.log(`user joined ${userGid}`)
+                }
+
+                response({ error: null})
+            })
+
+            socket.on("/messenger/send", async (user, response) => {
+                if(!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
+
+                if(!user?.message || typeof user?.message !== "object") return response({ error: "No message object provided" })
+                if(!user?.message?.type) return response({ error: "No message type provided" })
+
+                if(!user?.message?.publicKey) return response({ error: "No public key provided" })
+                if(!user?.message?.targetPublicKey) return response({ error: "No target public key provided" })
+
+                let userGid = this.signer.generateGid(user?.message?.publicKey);
+                let targetGid = this.signer.generateGid(user?.message?.targetPublicKey);
+
+                const targetIsOnline = io.sockets.adapter.rooms.has(targetGid);
+                console.log(targetIsOnline)
+
+                // if target is online send it directly to them
+                this.emitToGid(targetGid, "/messenger/receive", user.message);
+
+                // temporarily save the message
+                this.setInboxEntry({
+                    targetId: targetGid,
+                    type: "messenger_user-message",
+                    data: user.message,
+                    expiresAt: DateTools.getDateFromOffset("3 days").getTime(),
+                    customId: user.message.timestamp
+                })
+
+
+                response({ error: null})
+            })
+
+            socket.on("/messenger/fetch", async (user, response) => {
+                if (!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
+            });
+        })
+    }
+
+    async emitToGid(targetGid, event, data){
+        this.io.to(`${targetGid}`).emit(event, {...data})
+    }
+
+    async validateSocketAuth(sessionId, publicKey, response){
+        if(!sessionId || !publicKey){
+            response?.({ error: "Authentication failed" })
+            return false
+        }
+
+        let sessionResult = AuthTools.verifySession(this.auther.authSessions, sessionId, publicKey);
+        let result = sessionResult?.valid ?? false;
+
+        if(!result && response){
+            response({ error: "Authentication failed - Result invalid" })
+            return false;
+        }
+        else if(result === true){
+            return true;
+        }
+
+        response({ error: "Authentication failed" })
+        return false;
+    }
+
+    getSocketIp(socket){
+        return socket?.handshake?.headers["x-forwarded-for"]?.split(",")[0].trim()
+            || socket?.handshake?.headers["x-real-ip"]
+            || socket?.handshake?.address;
     }
 
     async setInboxEntry({
@@ -115,6 +221,7 @@ export default class dSyncInbox {
         data = null,
         isRead = null,
         customId = null,
+        expiresAt = null,
     } = {}){
         if(!type?.trim()) throw new Error("type is required!")
         if(!targetId?.trim()) throw new Error("targetId is required!")
@@ -122,11 +229,11 @@ export default class dSyncInbox {
         if(!customId) throw new Error("customId is required for identification!")
 
         return await this.db.queryDatabase(
-            `INSERT INTO inbox (id, targetId, type, data, isRead, customId)
-             VALUES(?, ?, ?, ?, ?, ?)
+            `INSERT INTO inbox (id, targetId, type, data, isRead, customId, expiresAt)
+             VALUES(?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                   isRead = IF(isRead IS NULL, VALUES(isRead), isRead)`,
-            [randomUUID(), targetId, type, JSON.stringify(data, null, 4), isRead, customId]
+            [randomUUID(), targetId, type, JSON.stringify(data, null, 4), isRead, customId, expiresAt]
         );
     }
 
@@ -142,6 +249,7 @@ export default class dSyncInbox {
                     {name: "type", type: "varchar(255) NOT NULL"},
                     {name: "data", type: "longtext"},
                     {name: "createdAt", type: "bigint NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000)"},
+                    {name: "expiresAt", type: "bigint NULL DEFAULT NULL"},
                     {name: "isRead", type: "bigint NULL DEFAULT NULL"},
                 ]
             }
