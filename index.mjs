@@ -145,6 +145,7 @@ export default class dSyncInbox {
                         gid: userGid,
                         home_server: user.home_server,
                         publicKey: user.publicKey,
+                        vanity: user?.vanity ?? null
                     })
 
                     if(gidTableResult?.affectedRows !== 1){
@@ -169,27 +170,45 @@ export default class dSyncInbox {
                 if (!user?.message?.type) return response({error: "No message type provided"})
 
                 if (!user?.message?.publicKey) return response({error: "No public key provided"})
-                if (!user?.message?.targetPublicKey) return response({error: "No target public key provided"})
+                if (!user?.message?.targetIdentifier) return response({error: "No target identifier provided"})
+
+                let targetData = await this.getGidTable(user?.message?.targetIdentifier);
+                let targetPublicKey = targetData?.publicKey;
+
+                if(!targetPublicKey) return response({error: "No public key found of target"})
 
                 let userGid = this.signer.generateGid(user?.message?.publicKey);
-                let targetGid = this.signer.generateGid(user?.message?.targetPublicKey);
+                let targetGid = this.signer.generateGid(targetPublicKey);
 
                 const targetIsOnline = io.sockets.adapter.rooms.has(targetGid);
-                console.log(targetIsOnline)
 
                 // if target is online send it directly to them
-                this.emitToGid(targetGid, "/messenger/receive", user.message);
+                if(!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
 
                 // temporarily save the message
-                this.setInboxEntry({
-                    targetId: targetGid,
-                    type: "messenger_user-message",
-                    data: user.message,
-                    expiresAt: DateTools.getDateFromOffset("3 days").getTime(),
-                    customId: user.message.timestamp
-                })
+                if(!user?.message?.test){
+                    this.setInboxEntry({
+                        customId: user?.message?.timestamp ?? null,
+                        targetId: targetGid,
+                        type: "messenger_user-message",
+                        data: user.message,
+                        expiresAt: DateTools.getDateFromOffset("3 days").getTime(),
+                        customId: user.message.timestamp
+                    })
+                }
 
-                response({error: null})
+                response({
+                    error: null,
+                    target: {
+                        gid: targetData.gid,
+                        vanity: targetData.vanity,
+                        publicKey: targetData.publicKey,
+                        home_server: targetData.home_server,
+                        updatedAt: targetData.updatedAt,
+                        createdAt: targetData.createdAt,
+                        isOnline: targetIsOnline,
+                    }
+                })
             })
 
             socket.on("/messenger/fetch", async (user, response) => {
@@ -254,6 +273,7 @@ export default class dSyncInbox {
                              gid = null,
                              publicKey = null,
                              home_server = null,
+                             vanity = null,
                          } = {}) {
         if (gid?.trim()?.length === 0) return { error: "GID missing!"}
         if (publicKey?.trim()?.length === 0) return { error: "Public Key missing!"}
@@ -263,27 +283,25 @@ export default class dSyncInbox {
         if(calculatedGid !== gid) return { error: "GID and Public Key Mismatch!"}
 
         return await this.db.queryDatabase(
-            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt)
-             VALUES (?, ?, ?, ?) ON DUPLICATE KEY
+            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity)
+             VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY
             UPDATE
                 updatedAt = (UNIX_TIMESTAMP() * 1000),
-                home_server = home_server`,
-            [gid, publicKey, home_server, null]
+                home_server = VALUES(home_server),
+                vanity = COALESCE(VALUES(vanity), vanity)`,
+            [gid, publicKey, home_server, null, vanity]
         );
     }
 
-    async getGidTable(gid = null, publicKey = null) {
-        if (gid === null && publicKey === null) return { error: "GID or Public Key missing!"}
+    async getGidTable(identifier) {
+        if (!identifier) return { error: "Missing identifier!"}
 
-        let calculatedGid = gid;
-        if(publicKey){
-            calculatedGid = await this.signer.generateGid(publicKey);
-        }
-
-        return await this.db.queryDatabase(
-            `SELECT * FROM inbox_gid_table WHERE gid = ?`,
-            [calculatedGid]
+        let row = await this.db.queryDatabase(
+            `SELECT * FROM inbox_gid_table WHERE gid = ? OR publicKey = ? OR vanity = ? LIMIT 1`,
+            [identifier, identifier, identifier]
         );
+
+        return row[0] ? row[0] : null;
     }
 
     async init() {
@@ -306,6 +324,7 @@ export default class dSyncInbox {
                 name: "inbox_gid_table",
                 columns: [
                     {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
+                    {name: "vanity", type: "varchar(255) NULL DEFAULT NULL UNIQUE KEY"},
                     {name: "gid", type: "varchar(255) NOT NULL UNIQUE KEY"},
                     {name: "publicKey", type: "longtext"},
                     {name: "home_server", type: "varchar(500) NOT NULL"},
