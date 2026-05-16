@@ -140,6 +140,8 @@ export default class dSyncInbox {
                 // check database if user is known with home server etc
                 let inTable = Object.keys(await this.getGidTable(userGid))?.length > 0;
                 if(!inTable){
+
+                    // set table etc
                     if(!user?.home_server) return response({ error: "Requesting Home Server! (home_server)"})
                     let gidTableResult = await this.updateGidTable({
                         gid: userGid,
