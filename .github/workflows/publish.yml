@@ -30,8 +30,6 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org/
 
-      - run: npm install -g npm@latest
-
       - run: npm ci
 
       - run: |

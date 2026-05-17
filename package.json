@@ -7,8 +7,7 @@
     "url": "https://github.com/NETWORK-Z-Dev/dSyncInbox/issues"
   },
   "repository": {
-    "type": "git",
-    "url": "git+https://github.com/NETWORK-Z-Dev/dSyncInbox.git"
+    "url": "https://github.com/NETWORK-Z-Dev/dSyncInbox"
   },
   "license": "UNLICENSED",
   "author": "",
