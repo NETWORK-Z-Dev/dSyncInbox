@@ -186,6 +186,7 @@ export default class dSyncInbox {
 
                 // if target is online send it directly to them
                 if (!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
+                if (!user?.message?.test) this.emitToGid(userGid, "/messenger/receive", user.message);
 
                 // temporarily save the message
                 if (!user?.message?.test) {
