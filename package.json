@@ -2,9 +2,16 @@
   "name": "@hackthedev/dsync-inbox",
   "version": "1.0.0",
   "description": "",
-  "license": "ISC",
+  "homepage": "https://github.com/NETWORK-Z-Dev/dSyncInbox#readme",
+  "bugs": {
+    "url": "https://github.com/NETWORK-Z-Dev/dSyncInbox/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NETWORK-Z-Dev/dSyncInbox.git"
+  },
+  "license": "UNLICENSED",
   "author": "",
-  "type": "commonjs",
   "main": "index.mjs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
