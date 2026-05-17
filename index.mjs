@@ -138,7 +138,7 @@ export default class dSyncInbox {
                 if (!userGid) return response({error: "Failed to generate gid"})
 
                 // check database if user is known with home server etc
-                let inTable = Object.keys(await this.getGidTable(userGid ?? {}))?.length > 0;
+                let inTable = Object.keys(await this.getGidTable(userGid) ?? {})?.length > 0;
                 if (!inTable) {
 
                     // set table etc
