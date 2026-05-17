@@ -139,10 +139,10 @@ export default class dSyncInbox {
 
                 // check database if user is known with home server etc
                 let inTable = Object.keys(await this.getGidTable(userGid))?.length > 0;
-                if(!inTable){
+                if (!inTable) {
 
                     // set table etc
-                    if(!user?.home_server) return response({ error: "Requesting Home Server! (home_server)"})
+                    if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
                     let gidTableResult = await this.updateGidTable({
                         gid: userGid,
                         home_server: user.home_server,
@@ -150,7 +150,7 @@ export default class dSyncInbox {
                         vanity: user?.vanity ?? null
                     })
 
-                    if(gidTableResult?.affectedRows !== 1){
+                    if (gidTableResult?.affectedRows !== 1) {
                         Logger.warn("Messenger GID Table insert warning!")
                         Logger.warn(gidTableResult)
                     }
@@ -166,29 +166,29 @@ export default class dSyncInbox {
             })
 
             socket.on("/messenger/send", async (user, response) => {
-                if (!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
+                if (!await this.validateSocketAuth(user?.sessionId, user?.message?.author?.publicKey, response)) return;
 
                 if (!user?.message || typeof user?.message !== "object") return response({error: "No message object provided"})
                 if (!user?.message?.type) return response({error: "No message type provided"})
 
-                if (!user?.message?.publicKey) return response({error: "No public key provided"})
+                if (!user?.message?.author?.publicKey) return response({error: "No public key provided"})
                 if (!user?.message?.targetIdentifier) return response({error: "No target identifier provided"})
 
                 let targetData = await this.getGidTable(user?.message?.targetIdentifier);
                 let targetPublicKey = targetData?.publicKey;
 
-                if(!targetPublicKey) return response({error: "No public key found of target"})
+                if (!targetPublicKey) return response({error: "No public key found of target"})
 
-                let userGid = this.signer.generateGid(user?.message?.publicKey);
+                let userGid = this.signer.generateGid(user?.message?.author?.publicKey);
                 let targetGid = this.signer.generateGid(targetPublicKey);
 
                 const targetIsOnline = io.sockets.adapter.rooms.has(targetGid);
 
                 // if target is online send it directly to them
-                if(!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
+                if (!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
 
                 // temporarily save the message
-                if(!user?.message?.test){
+                if (!user?.message?.test) {
                     this.setInboxEntry({
                         customId: user?.message?.timestamp ?? null,
                         targetId: targetGid,
@@ -214,7 +214,55 @@ export default class dSyncInbox {
             })
 
             socket.on("/messenger/fetch", async (user, response) => {
-                if (!await this.validateSocketAuth(user?.sessionId, user?.message?.publicKey, response)) return;
+                if (!await this.validateSocketAuth(user?.sessionId, user?.publicKey, response)) return;
+
+                let userGid = this.signer.generateGid(user?.publicKey);
+                if (!userGid) return response({error: "Failed to generate gid"})
+
+                let timestamp = Number(user?.timestamp ?? 0);
+                let limit = Number(user?.limit ?? 50);
+
+                if (limit > 100) limit = 100;
+                if (limit < 1) limit = 50;
+
+                let messages = null;
+
+                if (timestamp > 0) {
+                    messages = await this.db.queryDatabase(
+                        `SELECT *
+                         FROM inbox
+                         WHERE targetId = ?
+                           AND type = ?
+                           AND createdAt > ?
+                         ORDER BY createdAt ASC
+                             LIMIT ?`,
+                        [userGid, "messenger_user-message", timestamp, limit]
+                    );
+                } else {
+                    messages = await this.db.queryDatabase(
+                        `SELECT *
+                         FROM inbox
+                         WHERE targetId = ?
+                           AND type = ?
+                         ORDER BY createdAt ASC
+                             LIMIT ?`,
+                        [userGid, "messenger_user-message", limit]
+                    );
+                }
+
+                for (let message of messages ?? []) {
+                    if (typeof message?.data === "string" && message.data.startsWith("{")) {
+                        message.data = JSON.parse(message.data);
+                    }
+                }
+
+                response({
+                    error: null,
+                    inbox: messages ?? [],
+                    latestTimestamp: messages?.length
+                        ? Math.max(...messages.map(m => Number(m.createdAt ?? 0)))
+                        : timestamp
+                });
             });
         })
     }
@@ -277,12 +325,12 @@ export default class dSyncInbox {
                              home_server = null,
                              vanity = null,
                          } = {}) {
-        if (gid?.trim()?.length === 0) return { error: "GID missing!"}
-        if (publicKey?.trim()?.length === 0) return { error: "Public Key missing!"}
-        if (home_server?.trim()?.length === 0) return { error: "Home Server missing!"}
+        if (gid?.trim()?.length === 0) return {error: "GID missing!"}
+        if (publicKey?.trim()?.length === 0) return {error: "Public Key missing!"}
+        if (home_server?.trim()?.length === 0) return {error: "Home Server missing!"}
 
         let calculatedGid = await this.signer.generateGid(publicKey);
-        if(calculatedGid !== gid) return { error: "GID and Public Key Mismatch!"}
+        if (calculatedGid !== gid) return {error: "GID and Public Key Mismatch!"}
 
         return await this.db.queryDatabase(
             `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity)
@@ -296,7 +344,7 @@ export default class dSyncInbox {
     }
 
     async getGidTable(identifier) {
-        if (!identifier) return { error: "Missing identifier!"}
+        if (!identifier) return {error: "Missing identifier!"}
 
         let row = await this.db.queryDatabase(
             `SELECT * FROM inbox_gid_table WHERE gid = ? OR publicKey = ? OR vanity = ? LIMIT 1`,
