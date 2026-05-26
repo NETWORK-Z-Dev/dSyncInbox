@@ -147,7 +147,9 @@ export default class dSyncInbox {
                         gid: userGid,
                         home_server: user.home_server,
                         publicKey: user.publicKey,
-                        vanity: user?.vanity ?? null
+                        vanity: user?.vanity ?? null,
+                        name: user?.name ?? null,
+                        icon: user?.icon ?? null,
                     })
 
                     if (gidTableResult?.affectedRows !== 1) {
@@ -325,6 +327,8 @@ export default class dSyncInbox {
                              publicKey = null,
                              home_server = null,
                              vanity = null,
+                             name = null,
+                             icon = null,
                          } = {}) {
         if (gid?.trim()?.length === 0) return {error: "GID missing!"}
         if (publicKey?.trim()?.length === 0) return {error: "Public Key missing!"}
@@ -335,12 +339,14 @@ export default class dSyncInbox {
 
         return await this.db.queryDatabase(
             `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity)
-             VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY
+             VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY
             UPDATE
                 updatedAt = (UNIX_TIMESTAMP() * 1000),
                 home_server = VALUES(home_server),
-                vanity = COALESCE(VALUES(vanity), vanity)`,
-            [gid, publicKey, home_server, null, vanity]
+                vanity = COALESCE(VALUES(vanity), vanity),
+                nickname = COALESCE(VALUES(name), name),
+                icon = COALESCE(VALUES(icon), icon)`,
+            [gid, publicKey, home_server, null, vanity, name, icon]
         );
     }
 
@@ -375,6 +381,8 @@ export default class dSyncInbox {
                 name: "inbox_gid_table",
                 columns: [
                     {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
+                    {name: "icon", type: "varchar(255) NULL DEFAULT NULL"},
+                    {name: "name", type: "varchar(255) NULL DEFAULT NULL"},
                     {name: "vanity", type: "varchar(255) NULL DEFAULT NULL UNIQUE KEY"},
                     {name: "gid", type: "varchar(255) NOT NULL UNIQUE KEY"},
                     {name: "publicKey", type: "longtext"},
