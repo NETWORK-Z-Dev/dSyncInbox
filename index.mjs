@@ -137,25 +137,20 @@ export default class dSyncInbox {
                 let userGid = this.signer.generateGid(user?.publicKey);
                 if (!userGid) return response({error: "Failed to generate gid"})
 
-                // check database if user is known with home server etc
-                let inTable = Object.keys(await this.getGidTable(userGid) ?? {})?.length > 0;
-                if (!inTable) {
+                // set table etc
+                if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
+                let gidTableResult = await this.updateGidTable({
+                    gid: userGid,
+                    home_server: user.home_server,
+                    publicKey: user.publicKey,
+                    vanity: user?.vanity ?? null,
+                    name: user?.name ?? null,
+                    icon: user?.icon ?? null,
+                })
 
-                    // set table etc
-                    if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
-                    let gidTableResult = await this.updateGidTable({
-                        gid: userGid,
-                        home_server: user.home_server,
-                        publicKey: user.publicKey,
-                        vanity: user?.vanity ?? null,
-                        name: user?.name ?? null,
-                        icon: user?.icon ?? null,
-                    })
-
-                    if (gidTableResult?.affectedRows !== 1) {
-                        Logger.warn("Messenger GID Table insert warning!")
-                        Logger.warn(gidTableResult)
-                    }
+                if (gidTableResult?.affectedRows !== 1) {
+                    Logger.warn("Messenger GID Table insert warning!")
+                    Logger.warn(gidTableResult)
                 }
 
                 // join own room to emit messages to
