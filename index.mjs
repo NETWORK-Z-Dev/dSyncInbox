@@ -149,9 +149,9 @@ export default class dSyncInbox {
                     icon: user?.icon ?? null,
                 })
 
-                if (gidTableResult?.affectedRows !== 1) {
-                    Logger.warn("Messenger GID Table insert warning!")
-                    Logger.warn(gidTableResult)
+                if (![0, 1, 2].includes(gidTableResult?.affectedRows)) {
+                    Logger.warn("Messenger GID Table insert/update warning!")
+                    console.log(gidTableResult)
                 }
 
                 // join own room to emit messages to
