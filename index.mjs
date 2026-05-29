@@ -205,6 +205,8 @@ export default class dSyncInbox {
                     target: {
                         gid: targetData.gid,
                         vanity: targetData.vanity,
+                        name: targetData.name,
+                        icon: targetData.icon,
                         publicKey: targetData.publicKey,
                         home_server: targetData.home_server,
                         updatedAt: targetData.updatedAt,
