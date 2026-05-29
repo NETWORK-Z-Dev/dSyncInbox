@@ -339,7 +339,7 @@ export default class dSyncInbox {
                 updatedAt = (UNIX_TIMESTAMP() * 1000),
                 home_server = VALUES(home_server),
                 vanity = COALESCE(VALUES(vanity), vanity),
-                nickname = COALESCE(VALUES(name), name),
+                name = COALESCE(VALUES(name), name),
                 icon = COALESCE(VALUES(icon), icon)`,
             [gid, publicKey, home_server, null, vanity, name, icon]
         );
