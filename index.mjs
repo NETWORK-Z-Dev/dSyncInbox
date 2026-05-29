@@ -1,6 +1,7 @@
 import {randomUUID, randomBytes, createHash} from "crypto"
 import DateTools from "@hackthedev/datetools"
 import AuthTools from "@hackthedev/dsync-auth";
+import Logger from "@hackthedev/terminal-logger"
 
 function generateRandomString() {
     return (Math.random().toString(36).slice(2)) + (Math.random().toString(36).slice(2))
