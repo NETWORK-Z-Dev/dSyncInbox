@@ -338,7 +338,7 @@ export default class dSyncInbox {
         if (calculatedGid !== gid) return {error: "GID and Public Key Mismatch!"}
 
         return await this.db.queryDatabase(
-            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity)
+            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity, name, icon)
              VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY
             UPDATE
                 updatedAt = (UNIX_TIMESTAMP() * 1000),
