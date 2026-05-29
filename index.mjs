@@ -153,7 +153,7 @@ export default class dSyncInbox {
                 if (![0, 1, 2].includes(gidTableResult?.affectedRows)) {
                     Logger.warn("Messenger GID Table insert/update warning!")
                     console.log(gidTableResult)
-                    updateError = true;
+                    updateError = gidTableResult?.error ?? null;
                 }
 
                 // join own room to emit messages to
@@ -162,7 +162,7 @@ export default class dSyncInbox {
                     socket.join(userGid);
                 }
 
-                response({error: updateError ? "Couldnt set or update member info!" : null})
+                response({error: updateError ?? null})
             })
 
             socket.on("/messenger/send", async (user, response) => {
