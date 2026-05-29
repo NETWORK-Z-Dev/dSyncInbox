@@ -328,22 +328,34 @@ export default class dSyncInbox {
                              name = null,
                              icon = null,
                          } = {}) {
-        if (gid?.trim()?.length === 0) return {error: "GID missing!"}
-        if (publicKey?.trim()?.length === 0) return {error: "Public Key missing!"}
-        if (home_server?.trim()?.length === 0) return {error: "Home Server missing!"}
+        if (!gid?.trim()) return {error: "GID missing!"}
+        if (!publicKey?.trim()) return {error: "Public Key missing!"}
+        if (!home_server?.trim()) return {error: "Home Server missing!"}
 
         let calculatedGid = await this.signer.generateGid(publicKey);
         if (calculatedGid !== gid) return {error: "GID and Public Key Mismatch!"}
 
+        // check for duplicate
+        if (vanity?.trim()) {
+            let vanityRows = await this.db.queryDatabase(
+                `SELECT gid FROM inbox_gid_table WHERE vanity = ? AND gid != ? LIMIT 1`,
+                [vanity, gid]
+            );
+
+            if (vanityRows?.length > 0) {
+                return {error: "Vanity already taken!"}
+            }
+        }
+
         return await this.db.queryDatabase(
             `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity, name, icon)
-             VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY
-            UPDATE
-                updatedAt = (UNIX_TIMESTAMP() * 1000),
-                home_server = VALUES(home_server),
-                vanity = COALESCE(VALUES(vanity), vanity),
-                name = COALESCE(VALUES(name), name),
-                icon = COALESCE(VALUES(icon), icon)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                                      updatedAt = (UNIX_TIMESTAMP() * 1000),
+                                      home_server = VALUES(home_server),
+                                      vanity = COALESCE(VALUES(vanity), vanity),
+                                      name = COALESCE(VALUES(name), name),
+                                      icon = COALESCE(VALUES(icon), icon)`,
             [gid, publicKey, home_server, null, vanity, name, icon]
         );
     }
