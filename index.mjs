@@ -7,6 +7,10 @@ function generateRandomString() {
     return (Math.random().toString(36).slice(2)) + (Math.random().toString(36).slice(2))
 }
 
+function getStringSize(value) {
+    return new TextEncoder().encode(String(value)).byteLength / 1024;
+}
+
 export default class dSyncInbox {
     constructor({
                     io = null,
@@ -138,6 +142,11 @@ export default class dSyncInbox {
                 let userGid = this.signer.generateGid(user?.publicKey);
                 if (!userGid) return response({error: "Failed to generate gid"})
 
+                if(getStringSize(user?.icon) > 10) return response({ error: "Icon URL too long!" })
+                if(getStringSize(user?.name) > 5) return response({ error: "Name too long!" })
+                if(getStringSize(user?.vanity) > 5) return response({ error: "vanity too long!" })
+                if(getStringSize(user?.publicKey) > 10) return response({ error: "public key too long!" })
+
                 // set table etc
                 if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
                 let gidTableResult = await this.updateGidTable({
@@ -173,6 +182,9 @@ export default class dSyncInbox {
 
                 if (!user?.message?.author?.publicKey) return response({error: "No public key provided"})
                 if (!user?.message?.targetIdentifier) return response({error: "No target identifier provided"})
+
+                if(getStringSize(user?.message) > 15) return response({ error: "Message too long!" })
+                if(getStringSize(user?.message?.author?.publicKey) > 10) return response({ error: "public key too long!" })
 
                 let targetData = await this.getGidTable(user?.message?.targetIdentifier);
                 let targetPublicKey = targetData?.publicKey;
