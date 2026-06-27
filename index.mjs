@@ -84,7 +84,24 @@ export default class dSyncInbox {
             next();
         });
 
-        app.post(`/inbox/fetch{/:timestamp}{/:inboxId}{/:customId}`, this.express.json(), async (req, res) => {
+        app.get(`/messenger/profile/:identifier`, this.express.json(), async (req, res) => {
+            const {identifier} = req?.params;
+
+            if(!identifier) return res.status(403).json({error: "Missing identifier"})
+
+            let gidInbox = await this.getGidTable(identifier);
+            if(!gidInbox?.rowId) return res.status(404).json({error: "User not found"})
+
+            let targetReturnObj = await this.getTargetReturnObject(gidInbox);
+            return res.status(200).json({
+                error: null,
+                target: {
+                    ...targetReturnObj
+                }
+            })
+        });
+
+        app.post(`/messenger/fetch{/:timestamp}{/:inboxId}{/:customId}`, this.express.json(), async (req, res) => {
             const {inboxId, timestamp, customId} = req?.params;
             if (!await this.isValidated(req, res)) return res.status(403).json({error: "Forbidden"})
 
@@ -142,32 +159,54 @@ export default class dSyncInbox {
                 let userGid = this.signer.generateGid(user?.publicKey);
                 if (!userGid) return response({error: "Failed to generate gid"})
 
-                if(getStringSize(user?.icon) > 10) return response({ error: "Icon URL too long!" })
-                if(getStringSize(user?.name) > 5) return response({ error: "Name too long!" })
+                if(getStringSize(user?.profile?.signature) > 10) return response({ error: "Signature too long!" })
+                if(getStringSize(user?.profile?.banner) > 10) return response({ error: "Banner URL too long!" })
+                if(getStringSize(user?.profile?.icon) > 10) return response({ error: "Icon URL too long!" })
+                if(getStringSize(user?.profile?.name) > 5) return response({ error: "Name too long!" })
+
                 if(getStringSize(user?.vanity) > 5) return response({ error: "vanity too long!" })
                 if(getStringSize(user?.publicKey) > 10) return response({ error: "public key too long!" })
 
                 // set table etc
+                let updateError = false;
                 if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
                 let gidTableResult = await this.updateGidTable({
                     gid: userGid,
-                    home_server: user.home_server,
-                    publicKey: user.publicKey,
+                    home_server: user?.home_server,
+                    publicKey: user?.publicKey,
                     vanity: user?.vanity ?? null,
-                    name: user?.name ?? null,
-                    icon: user?.icon ?? null,
                 })
 
-                let updateError = false;
+                // optionally update profile stuff
+                if(user?.profile){
+                    let existingProfile = await this.getGidTable(userGid);
+                    if(!existingProfile?.rowId) return response({error: "Gid Table ID not found for profile!?"})
+
+                    // try updating profile
+                    let profileTableResult = await this.updateProfileTable({
+                        gid_table_ref: existingProfile?.rowId,
+                        icon: user?.profile?.icon ?? null,
+                        banner: user?.profile?.banner ?? null,
+                        name: user?.profile?.name ?? null,
+                        signature: user?.profile?.signature ?? null,
+                    })
+
+                    // show error otherwise
+                    if (![0, 1, 2].includes(profileTableResult?.affectedRows)) {
+                        Logger.warn("Messenger profile Table insert/update warning!")
+                        console.log(gidTableResult)
+                        updateError = gidTableResult?.error ?? null;
+                    }
+                }
+
                 if (![0, 1, 2].includes(gidTableResult?.affectedRows)) {
                     Logger.warn("Messenger GID Table insert/update warning!")
                     console.log(gidTableResult)
-                    updateError = gidTableResult?.error ?? null;
+                    updateError += gidTableResult?.error ?? null;
                 }
 
                 // join own room to emit messages to
-                const targetIsOnline = io.sockets.adapter.rooms.has(userGid);
-                if (!targetIsOnline) {
+                if (!await this.targetIsOnline(userGid)) {
                     socket.join(userGid);
                 }
 
@@ -187,14 +226,13 @@ export default class dSyncInbox {
                 if(getStringSize(user?.message?.author?.publicKey) > 10) return response({ error: "public key too long!" })
 
                 let targetData = await this.getGidTable(user?.message?.targetIdentifier);
+                let targetProfile = await this.getProfile(targetData?.rowId);
                 let targetPublicKey = targetData?.publicKey;
 
                 if (!targetPublicKey) return response({error: "No public key found of target"})
 
                 let userGid = this.signer.generateGid(user?.message?.author?.publicKey);
                 let targetGid = this.signer.generateGid(targetPublicKey);
-
-                const targetIsOnline = io.sockets.adapter.rooms.has(targetGid);
 
                 // if target is online send it directly to them
                 if (!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
@@ -212,18 +250,11 @@ export default class dSyncInbox {
                     })
                 }
 
+                let targetReturnObj = await this.getTargetReturnObject(targetData);
                 response({
                     error: null,
                     target: {
-                        gid: targetData.gid,
-                        vanity: targetData.vanity,
-                        name: targetData.name,
-                        icon: targetData.icon,
-                        publicKey: targetData.publicKey,
-                        home_server: targetData.home_server,
-                        updatedAt: targetData.updatedAt,
-                        createdAt: targetData.createdAt,
-                        isOnline: targetIsOnline,
+                        ...targetReturnObj
                     }
                 })
             })
@@ -280,6 +311,33 @@ export default class dSyncInbox {
                 });
             });
         })
+    }
+
+    async getTargetReturnObject(gidObj){
+        if(!gidObj?.rowId) throw new Error("No rowId provided");
+
+        let profileObj = await this.getProfile(gidObj.rowId);
+
+        return {
+            gid: gidObj?.gid ?? null,
+            vanity: gidObj.vanity ?? null,
+            publicKey: gidObj.publicKey ?? null,
+            home_server: gidObj.home_server ?? null,
+            updatedAt: gidObj.updatedAt ?? null,
+            createdAt: gidObj.createdAt ?? null,
+            isOnline: await this.targetIsOnline(gidObj.gid) ?? null,
+
+            profile: {
+                name: profileObj?.name ?? null,
+                banner: profileObj?.banner ?? null,
+                signature: profileObj?.signature ?? null,
+                icon: profileObj?.icon ?? null,
+            }
+        }
+    }
+
+    async targetIsOnline(targetGid){
+        return this.io.sockets.adapter.rooms.has(targetGid);
     }
 
     async emitToGid(targetGid, event, data) {
@@ -339,8 +397,6 @@ export default class dSyncInbox {
                              publicKey = null,
                              home_server = null,
                              vanity = null,
-                             name = null,
-                             icon = null,
                          } = {}) {
         if (!gid?.trim()) return {error: "GID missing!"}
         if (!publicKey?.trim()) return {error: "Public Key missing!"}
@@ -362,15 +418,13 @@ export default class dSyncInbox {
         }
 
         return await this.db.queryDatabase(
-            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity, name, icon)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO inbox_gid_table (gid, publicKey, home_server, updatedAt, vanity)
+             VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                                       updatedAt = (UNIX_TIMESTAMP() * 1000),
                                       home_server = VALUES(home_server),
-                                      vanity = COALESCE(VALUES(vanity), vanity),
-                                      name = COALESCE(VALUES(name), name),
-                                      icon = COALESCE(VALUES(icon), icon)`,
-            [gid, publicKey, home_server, null, vanity, name, icon]
+                                      vanity = COALESCE(VALUES(vanity), vanity)`,
+            [gid, publicKey, home_server, null, vanity]
         );
     }
 
@@ -378,11 +432,50 @@ export default class dSyncInbox {
         if (!identifier) return {error: "Missing identifier!"}
 
         let row = await this.db.queryDatabase(
-            `SELECT * FROM inbox_gid_table WHERE gid = ? OR publicKey = ? OR vanity = ? LIMIT 1`,
-            [identifier, identifier, identifier]
+            `SELECT * FROM inbox_gid_table WHERE gid = ? OR publicKey = ? OR vanity = ? OR rowId = ? LIMIT 1`,
+            [identifier, identifier, identifier, identifier]
         );
 
         return row[0] ? row[0] : null;
+    }
+
+    async getProfile(identifier) {
+        if (!identifier) return {error: "Missing identifier!"}
+
+        let gidEntryRow = await this.getGidTable(identifier);
+        if(!gidEntryRow || !gidEntryRow?.rowId) return {error: "Missing gid entry!"}
+
+        let profile = await this.db.queryDatabase(
+            `SELECT * FROM inbox_profiles WHERE gid_table_ref = ? LIMIT 1`,
+            [gidEntryRow?.rowId]
+        );
+
+        return profile[0] ? profile[0] : null;
+    }
+
+    async updateProfileTable({
+                             gid_table_ref = null,
+                             name = null,
+                             icon = null,
+                             banner = null,
+                             signature = null,
+                         } = {}) {
+        if (!gid_table_ref) return {error: "gid_table_ref missing!"}
+
+        let gidEntryRow = await this.getGidTable(gid_table_ref);
+        if(!gidEntryRow || !gidEntryRow?.rowId) return {error: "Missing gid entry!"}
+
+        return await this.db.queryDatabase(
+            `INSERT INTO inbox_profiles (gid_table_ref, icon, banner, signature, name)
+             VALUES (?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                                      updatedAt = (UNIX_TIMESTAMP() * 1000),
+                                      name = COALESCE(VALUES(name), name),
+                                      banner = COALESCE(VALUES(banner), banner),
+                                      signature = COALESCE(VALUES(signature), signature),
+                                      icon = COALESCE(VALUES(icon), icon)`,
+            [gid_table_ref, icon, banner, signature, name]
+        );
     }
 
     async init() {
@@ -405,12 +498,25 @@ export default class dSyncInbox {
                 name: "inbox_gid_table",
                 columns: [
                     {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
-                    {name: "icon", type: "varchar(255) NULL DEFAULT NULL"},
-                    {name: "name", type: "varchar(255) NULL DEFAULT NULL"},
                     {name: "vanity", type: "varchar(255) NULL DEFAULT NULL UNIQUE KEY"},
                     {name: "gid", type: "varchar(255) NOT NULL UNIQUE KEY"},
                     {name: "publicKey", type: "longtext"},
                     {name: "home_server", type: "varchar(500) NOT NULL"},
+                    {name: "createdAt", type: "bigint NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000)"},
+                    {name: "updatedAt", type: "bigint DEFAULT NULL"},
+                ]
+            },
+            {
+                name: "inbox_profiles",
+                columns: [
+                    {name: "rowId", type: "int(100) NOT NULL AUTO_INCREMENT PRIMARY KEY"},
+                    {name: "gid_table_ref", type: "varchar(255) NOT NULL UNIQUE KEY"},
+                    //
+                    {name: "icon", type: "varchar(500) NULL DEFAULT NULL"},
+                    {name: "banner", type: "varchar(500) NULL DEFAULT NULL"},
+                    {name: "signature", type: "varchar(4000) NULL DEFAULT NULL"},
+                    {name: "name", type: "varchar(255) NULL DEFAULT NULL"},
+                    //
                     {name: "createdAt", type: "bigint NOT NULL DEFAULT (UNIX_TIMESTAMP() * 1000)"},
                     {name: "updatedAt", type: "bigint DEFAULT NULL"},
                 ]
