@@ -167,6 +167,13 @@ export default class dSyncInbox {
                 if(getStringSize(user?.vanity) > 5) return response({ error: "vanity too long!" })
                 if(getStringSize(user?.publicKey) > 10) return response({ error: "public key too long!" })
 
+                // check for reserved vanities n shit
+                if(user?.vanity){
+                    if(await this.checkReservedAlias(user.vanity) === true){
+                        return response({ error: "Vanity is reserved!" })
+                    }
+                }
+
                 // set table etc
                 let updateError = false;
                 if (!user?.home_server) return response({error: "Requesting Home Server! (home_server)"})
@@ -334,6 +341,17 @@ export default class dSyncInbox {
                 icon: profileObj?.icon ?? null,
             }
         }
+    }
+
+    async checkReservedAlias(alias){
+        return [
+            "support",
+            "admin",
+            "official",
+            "news",
+            "ads",
+            "team",
+        ].includes(alias.toLowerCase())
     }
 
     async targetIsOnline(targetGid){
