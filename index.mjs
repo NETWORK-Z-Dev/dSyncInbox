@@ -30,6 +30,8 @@ export default class dSyncInbox {
         this.express = express
         this.auther = dSyncAuth
 
+
+        this.userRateLimits = new Map();
         this.isValidated = typeof isValidated === "function" ? isValidated : null;
         this.getIdentifier = typeof getIdentifier === "function" ? getIdentifier : null;
         this.beforeReturn = typeof beforeReturn === "function" ? beforeReturn : null;
@@ -241,6 +243,12 @@ export default class dSyncInbox {
                 let userGid = this.signer.generateGid(user?.message?.author?.publicKey);
                 let targetGid = this.signer.generateGid(targetPublicKey);
 
+                if (!checkUserRateLimit(userGid)) {
+                    return response({
+                        error: "You have been rate limited! Try again later!"
+                    });
+                }
+
                 // if target is online send it directly to them
                 if (!user?.message?.test) this.emitToGid(targetGid, "/messenger/receive", user.message);
                 if (!user?.message?.test) this.emitToGid(userGid, "/messenger/receive", user.message);
@@ -318,6 +326,25 @@ export default class dSyncInbox {
                 });
             });
         })
+    }
+
+    checkUserRateLimit(userId, limit = 100, windowMs = 5 * 60 * 1000) {
+        // this is gonna be temporary as the dynamic rate limit will require more work.
+        // since it does exist in dcts, its not a library yet, so i might as well
+        // turn that into a nice package somehow.
+        const now = Date.now();
+        const timestamps = this.userRateLimits.get(userId) ?? [];
+        const activeTimestamps = timestamps.filter(timestamp => now - timestamp < windowMs);
+
+        if (activeTimestamps.length >= limit) {
+            userRateLimits.set(userId, activeTimestamps);
+            return false;
+        }
+
+        activeTimestamps.push(now);
+        this.userRateLimits.set(userId, activeTimestamps);
+
+        return true;
     }
 
     async getTargetReturnObject(gidObj){
