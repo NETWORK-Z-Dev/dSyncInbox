@@ -1,7 +1,7 @@
 {
   "name": "@hackthedev/dsync-inbox",
   "version": "1.0.18",
-  "description": "",
+  "description": "A general-purpose inbox system based on a 'home-server' approach.",
   "homepage": "https://github.com/NETWORK-Z-Dev/dSyncInbox#readme",
   "bugs": {
     "url": "https://github.com/NETWORK-Z-Dev/dSyncInbox/issues"
